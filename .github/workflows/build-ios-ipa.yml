@@ -1,0 +1,77 @@
+name: Build FaceSwap iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version and CocoaPods mode
+        run: |
+          flutter --version
+          flutter config --no-enable-swift-package-manager || true
+          pod --version
+
+      - name: Get Flutter packages
+        run: flutter pub get
+
+      - name: Create and configure complete iOS project
+        run: bash tool/prepare_ios_ci.sh
+
+      - name: Get packages after iOS scaffold generation
+        run: flutter pub get
+
+      - name: Verify generated iOS project
+        run: |
+          test -f ios/Podfile
+          test -d ios/Runner.xcodeproj
+          test -f ios/Runner/Info.plist
+          echo "iOS scaffold OK"
+          head -n 20 ios/Podfile
+
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          rm -rf Pods Podfile.lock
+          pod install --repo-update
+
+      - name: Show iOS permission configuration
+        run: |
+          /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :NSLocalNetworkUsageDescription" ios/Runner/Info.plist
+          grep -n "PERMISSION_" ios/Podfile || true
+
+      - name: Build iOS release without code signing
+        run: flutter build ios --release --no-codesign
+
+      - name: Create unsigned IPA for AltServer signing
+        run: |
+          rm -rf Payload FaceSwapCam-unsigned.ipa
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
+          /usr/bin/zip -qry FaceSwapCam-unsigned.ipa Payload
+          ls -lh FaceSwapCam-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceSwapCam-iOS-unsigned
+          path: FaceSwapCam-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
